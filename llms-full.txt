@@ -1,0 +1,149 @@
+# Firebase Auth Domain Doctor: auth/unauthorized-domain & missing initial state
+
+> Free, client-side checker that finds why Firebase Authentication throws `auth/unauthorized-domain`, `auth/missing-initial-state`, or a silent `signInWithRedirect()` failure, and gives the exact fix for your `firebaseConfig`, your OAuth provider's console, and Firebase Console's Authorized domains.
+
+Paste the Firebase error code (if you have one), the page origin your app actually runs at, your `firebaseConfig`'s `authDomain`, your Authentication → Settings → Authorized domains list, whether you call `signInWithPopup()` or `signInWithRedirect()`, where the app is hosted, and which OAuth provider you're using, and it computes the exact auth handler URL your setup should resolve to, then cross-checks every layer against it and reports concrete mismatches: no generic advice, no account, no backend.
+
+## What it checks
+
+- **`unauthorized_domain`**: the page's own host isn't on Authentication → Settings → Authorized domains, so Firebase throws `auth/unauthorized-domain`: "This domain is not authorized for OAuth operations for your Firebase project." Only `localhost` and the project's own `*.firebaseapp.com`/`*.web.app` domains are pre-authorized by default; a custom domain, a Vercel/Netlify deployment, or any other host is not authorized until added manually: connecting a custom domain to Firebase Hosting does not do this by itself. A raw IP address gets a separate message: Firebase's Authorized domains field only accepts real hostnames, never IP addresses, and has no wildcard support at all (so each Vercel/Netlify preview subdomain needs its own entry).
+- **`unauthorized_domain_unknown_host`**: you reported the `auth/unauthorized-domain` error code but left the page origin blank, so the exact host to authorize can't be shown yet.
+- **`redirect_third_party_cookie_blocked`**: `signInWithRedirect()` across two different origins (an `authDomain` that isn't the same as your app's own origin, which is the default when `authDomain` is left as `<project-id>.firebaseapp.com`) depends on a cross-origin iframe that connects to `authDomain` to read the pending sign-in state written before the redirect. Chrome M115+ (mandatory since 24 June 2024), Firefox 109+, and Safari 16.1+ all block that cross-origin storage access by default now, which breaks the flow silently or surfaces as `auth/missing-initial-state`: "Unable to process request due to missing initial state. This may happen if browser sessionStorage is inaccessible or accidentally cleared." The one documented exception: apps hosted on a subdomain of `firebaseapp.com` itself aren't affected and need no change.
+- **`redirect_cross_origin_fragile`**: the same cross-origin `signInWithRedirect()` setup, but third-party cookies aren't reported as blocked yet; a low-severity heads-up, since every major browser is moving toward blocking this by default, this is a matter of when, not if.
+- **`custom_auth_domain_missing_proxy`**: `authDomain` is set to a domain that isn't `*.firebaseapp.com`/`*.web.app` (Option 1 of Firebase's own best-practices guide), but a reverse proxy transparently forwarding every `/__/auth/**` request on that domain to `<project>.firebaseapp.com` (not a redirect) isn't confirmed: without it, Firebase's sign-in helper pages simply don't exist at that domain, and both popup and redirect flows break.
+- **`provider_redirect_uri_mismatch`**: the redirect/callback URI registered with your OAuth provider (Google Cloud Console, Apple Developer, Meta for Developers, GitHub OAuth Apps, Microsoft Entra ID) doesn't exactly equal the auth handler URL Firebase needs: `https://<authDomain>/__/auth/handler`. Anything else and the provider either rejects the request outright or returns the user somewhere Firebase's own helper page can't complete.
+- **`popup_unsupported_in_webview`**: `signInWithPopup()` (and often plain `signInWithRedirect()`, unless a custom URL-scheme handler is wired up) isn't reliably supported inside an embedded WebView such as Capacitor's: Firebase throws `auth/operation-not-supported-in-this-environment` for exactly this environment. The fix is to open the OAuth flow in the system browser (a Capacitor Browser plugin, an in-app `SFSafariViewController`/Custom Tab) and hand the resulting token to `signInWithCredential()`, or use a plugin wrapping the provider's native SDK directly.
+- **`popup_blocked`**: `auth/popup-blocked`. Browsers only let `window.open()` through the popup blocker when it runs synchronously inside a direct user gesture; an `await`, a promise callback, or a call on page load loses that gesture and gets blocked.
+- **`invalid_continue_uri`**: `auth/invalid-continue-uri`: "The continue URL must be a valid URL string." The continue URL's domain also has to be on Authorized domains, the same allow-list the rest of the sign-in flow uses.
+- **`web_storage_unsupported`**: `auth/web-storage-unsupported`: "This browser is not supported or 3rd party cookies and data may be disabled." Typically Safari Private Browsing, an in-app browser with tracking protection on, or a browser configured to block all third-party storage outright.
+- **`redirect_cancelled_by_user`**: `auth/redirect-cancelled-by-user`, informational and low-severity: the user closed or backed out of the provider's own consent screen. `getRedirectResult()` simply resolves `null`; it isn't a configuration bug.
+
+Alongside every diagnosis, the tool computes the exact set of hosts that belong on Authorized domains (the page's own host, plus `authDomain` itself when it differs), the exact auth handler URL, and which provider-console page each provider's redirect URI belongs in.
+
+## Who it's for
+
+Any web developer using Firebase Authentication (Google, Apple, Facebook, GitHub, or Microsoft as the sign-in provider) who hits `auth/unauthorized-domain`, `auth/missing-initial-state`, or a `signInWithRedirect()`/`signInWithPopup()` flow that fails without a clear error: deployed on Firebase Hosting, Vercel, Netlify, a custom domain, localhost, or packaged inside Capacitor/webview shells.
+
+## How it works
+
+Static HTML plus one dependency-free JavaScript file, `doctor-firebase.js`. The page calls a single pure function, `diagnose(config)`, entirely in your browser:
+
+```js
+import { diagnose } from './doctor-firebase.js';
+
+const result = diagnose({
+  error: { code },   // e.g. 'auth/unauthorized-domain', 'auth/missing-initial-state', ... (optional)
+  app: {
+    pageOrigin,               // the URL the browser actually shows, e.g. 'https://myapp.com'
+    authDomain,                // the authDomain value from your firebaseConfig
+    authorizedDomains,         // string[]: Firebase Console → Authentication → Settings → Authorized domains
+    method,                    // 'popup' | 'redirect'
+    hosting,                   // 'firebase' | 'vercel' | 'netlify' | 'custom' | 'localhost' | 'capacitor'
+    customAuthDomain,          // boolean|null: is authDomain your own domain, not *.firebaseapp.com?
+    reverseProxyForAuthHandler,// boolean|null: confirmed /__/auth/** proxy to <project>.firebaseapp.com?
+    browser,                   // 'chrome' | 'safari' | 'firefox'
+    thirdPartyCookiesBlocked,  // boolean|null
+  },
+  provider: {
+    name,                // 'google' | 'apple' | 'facebook' | 'github' | 'microsoft'
+    consoleRedirectUri,  // the redirect/callback URI currently registered with that provider
+  },
+});
+```
+
+There is no backend and no request that carries your configuration anywhere: read `index.html` and `doctor-firebase.js` directly to verify.
+
+## Worked example
+
+Input: a custom-domain app calling `signInWithRedirect()` for Sign in with Apple, with `authDomain` left at its Firebase-generated default instead of pointed at the app's own domain (the single most common setup that trips over the third-party-cookie wall, since it looks correct in every other way):
+
+```json
+{
+  "app": {
+    "pageOrigin": "https://myapp.com",
+    "authDomain": "my-project.firebaseapp.com",
+    "authorizedDomains": ["localhost", "myapp.com", "my-project.firebaseapp.com"],
+    "method": "redirect",
+    "hosting": "custom",
+    "browser": "safari"
+  },
+  "provider": { "name": "apple" }
+}
+```
+
+Output:
+
+```json
+{
+  "status": "fail",
+  "summary": "1 blocking mismatch found. Most urgent: app.method is \"redirect\" and authDomain (\"my-project.firebaseapp.com\") is a different origin from pageOrigin (\"myapp.com\"). signInWithRedirect() depends on a cross-origin iframe to authDomain to read the pending sign-in state; browsers that block that cross-origin storage access break the flow silently or throw auth/missing-initial-state. You reported \"safari\", one of the browsers that blocks it by default now (Chrome M115+, Firefox 109+, Safari 16.1+).",
+  "problems": [
+    {
+      "severity": "high",
+      "code": "redirect_third_party_cookie_blocked",
+      "message": "app.method is \"redirect\" and authDomain (\"my-project.firebaseapp.com\") is a different origin from pageOrigin (\"myapp.com\"). signInWithRedirect() depends on a cross-origin iframe to authDomain to read the pending sign-in state; browsers that block that cross-origin storage access break the flow silently or throw auth/missing-initial-state. You reported \"safari\", one of the browsers that blocks it by default now (Chrome M115+, Firefox 109+, Safari 16.1+).",
+      "path": "app.method",
+      "fix": "Point authDomain at your own domain with a reverse proxy (Option 1), switch to signInWithPopup() (Option 2/3), or serve the app from a Firebase Hosting custom domain (Option 4/5)."
+    }
+  ],
+  "fixes": [
+    { "title": "firebaseConfig: point authDomain at your own domain", "value": "authDomain: \"myapp.com\"", "where": "firebaseConfig" },
+    { "title": "firebase.json: proxy /__/auth/** to <project>.firebaseapp.com", "value": "{ \"hosting\": { \"rewrites\": [ { \"source\": \"/__/auth/**\", \"function\": \"authProxy\" } ] } }", "where": "firebase.json (Hosting rewrites)" },
+    { "title": "Or: switch to signInWithPopup()", "value": "signInWithPopup(auth, provider)", "where": "your sign-in code" }
+  ],
+  "checklist": [
+    "Register \"https://my-project.firebaseapp.com/__/auth/handler\" as the redirect/callback URI in Apple Developer → Certificates, Identifiers & Profiles → Services IDs.",
+    "Confirm these are on Authentication → Settings → Authorized domains: myapp.com, my-project.firebaseapp.com.",
+    "Confirm the authDomain in the firebaseConfig actually deployed matches the one you’re checking here: prod, staging, and localhost builds often carry different values.",
+    "If you use signInWithRedirect() across two different origins, plan around third-party cookie blocking now: Chrome, Firefox, and Safari all restrict it by default in current releases."
+  ],
+  "disclaimer": "Read-only, client-side analysis of the values you entered. Nothing is verified against your live Firebase project: always confirm in the Firebase console and your provider’s console before shipping. Not affiliated with Google or Firebase."
+}
+```
+
+Every field here looks configured correctly on its own: `myapp.com` is on Authorized domains, the Apple provider is wired up, and there's no typo anywhere. The bug is a relationship between two fields: `authDomain` still pointing at the Firebase-generated domain instead of `myapp.com`: that only breaks once a real browser with third-party storage blocking runs the flow, which is exactly the class of bug a config review by eye is most likely to miss.
+
+## FAQ
+
+**Why do I get `auth/unauthorized-domain` even though I never touched the Authorized domains setting?**
+`localhost` and your project's own `*.firebaseapp.com`/`*.web.app` domains are the only hosts Firebase pre-authorizes. Every other host: a custom domain, a Vercel/Netlify deployment, a preview subdomain, a raw IP address: has to be added to Authentication → Settings → Authorized domains by hand, and Firebase Hosting connecting a custom domain does not do this automatically; it's a separate step.
+
+**I connected my custom domain to Firebase Hosting. Why is sign-in still broken there?**
+Connecting a domain to Hosting (DNS records, TXT verification, SSL provisioning) and authorizing it for Authentication are two unrelated settings. Add the exact domain to Authentication → Settings → Authorized domains as well, and if you also pointed `authDomain` at that domain, register `https://<your-domain>/__/auth/handler` with your OAuth provider's own console too.
+
+**Does Firebase support wildcards in Authorized domains, for Vercel/Netlify preview URLs?**
+No. Authorized domains is an exact-match list with no wildcard support and no IP-address entries. Each preview subdomain (`*.vercel.app`, `*.netlify.app` per-branch/per-PR URLs) needs its own manual entry, or sign-in should only be tested after promoting to a stable domain.
+
+**What is `auth/missing-initial-state`, and why does it show up seemingly at random?**
+Firebase's own message is: "Unable to process request due to missing initial state. This may happen if browser sessionStorage is inaccessible or accidentally cleared." It's the visible symptom of `signInWithRedirect()`'s cross-origin iframe (to `authDomain`) losing access to the sign-in state it wrote just before the redirect, because the browser is now blocking that cross-origin storage access. Since Chrome M115+ (mandatory since 24 June 2024), Firefox 109+, and Safari 16.1+ all block it by default, this now hits essentially everyone using `authDomain` on a different origin than their app, not an edge case.
+
+**What are the actual fixes for the third-party-cookie problem?**
+Firebase documents five: (1) set `authDomain` to your own domain, with a reverse proxy forwarding `/__/auth/**` to `<project-id>.firebaseapp.com` transparently, not via a redirect; (2) switch to `signInWithPopup()`, which doesn't depend on that iframe, at the cost of popup-blocker and mobile-UX limitations; (3) a reverse proxy in front of your existing domain doing the same forwarding; (4) self-host the handler/iframe/init.json helper files under your own domain (incompatible with Apple Sign-In and SAML); (5) call each provider's SDK directly and exchange the credential via `signInWithCredential()`. The one documented exception needing no change at all: an app hosted on a subdomain of `firebaseapp.com` itself.
+
+**Why does `signInWithPopup()` throw `auth/operation-not-supported-in-this-environment` inside my Capacitor app?**
+Popups (and often plain redirects, without a custom URL-scheme handler wired up) aren't reliably supported inside an embedded WebView. Open the OAuth flow in the system browser instead: a Capacitor Browser plugin, an in-app `SFSafariViewController`/Custom Tab: and hand the resulting token to `signInWithCredential()`, or use a plugin that wraps the provider's own native sign-in SDK.
+
+**My `signInWithPopup()` call gets `auth/popup-blocked` even though I called it from a click handler.**
+Anything awaited, or any promise resolution, before the `signInWithPopup()` call loses the synchronous user-gesture context browsers require to let `window.open()` through. Call it as the very first thing in the click handler, with nothing awaited first.
+
+**I registered the wrong redirect URI with my OAuth provider: what should it actually be?**
+Exactly `https://<authDomain>/__/auth/handler`, where `authDomain` is the value from your `firebaseConfig` (default `<project-id>.firebaseapp.com`, or your own domain if you've switched it). This is Firebase's own hosted auth handler page, not a route in your app, and it's a different console for each provider: Google Cloud Console, Apple Developer, Meta for Developers, GitHub OAuth Apps, Microsoft Entra ID.
+
+## Privacy
+
+No account, no login, no cookies for the tool itself, no server-side processing of your config. The only analytics are anonymous usage counts (event name + count, never the content of what you entered) sent to a self-hosted Umami instance.
+
+## Links
+
+- Tool: https://arling.sk/firebase-auth-domain-doctor/
+- Short reference: https://arling.sk/firebase-auth-domain-doctor/llms.txt
+- Source code: https://github.com/AndryRoby/firebase-auth-domain-doctor
+- Sibling tool for Google OAuth redirect_uri_mismatch: https://arling.sk/google-oauth-redirect-doctor/
+- Sibling tool for Supabase Auth on the web (Next.js/Vite/SvelteKit): https://arling.sk/supabase-redirect-doctor/
+- Sibling tool for Supabase Auth on Expo / React Native: https://arling.sk/expo-supabase-auth-doctor/
+- Sibling tool for Supabase Auth on Flutter: https://arling.sk/flutter-supabase-doctor/
+- Hub (more ARLing tools): https://arling.sk/
+
+## Contact
+
+Built by ARLing s. r. o. (Bratislava, Slovakia). andrej@arling.sk
