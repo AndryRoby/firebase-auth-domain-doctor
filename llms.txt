@@ -1,0 +1,40 @@
+# Firebase Auth Domain Doctor: auth/unauthorized-domain & missing initial state
+
+> Free, client-side checker that finds why Firebase Authentication throws `auth/unauthorized-domain`, `auth/missing-initial-state`, or a silent `signInWithRedirect()` failure, and gives the exact fix for your `firebaseConfig`, your OAuth provider's console, and Firebase Console's Authorized domains.
+
+Paste the Firebase error code (if you have one), the page origin your app actually runs at, your `firebaseConfig`'s `authDomain`, your Authentication → Settings → Authorized domains list, whether you call `signInWithPopup()` or `signInWithRedirect()`, where the app is hosted (Firebase Hosting, Vercel, Netlify, a custom domain, localhost, or Capacitor/webview), and which OAuth provider you're using (Google, Apple, Facebook, GitHub, Microsoft). It computes the exact auth handler URL (`https://<authDomain>/__/auth/handler`) Firebase and your provider console both need, diffs it against what you've configured, and reports precisely which component differs: no account, no backend, nothing you type leaves your browser.
+
+## What it checks
+
+- Whether the page's own host is on Authentication → Settings → Authorized domains: `auth/unauthorized-domain` if not, with a separate message when the host is a raw IP address (Firebase's allow-list never accepts those, only real hostnames).
+- The third-party-cookie wall: `signInWithRedirect()` across an `authDomain` that differs from the app's own origin depends on a cross-origin iframe, which Chrome M115+, Firefox 109+, and Safari 16.1+ all block by default now: the flow fails silently or throws `auth/missing-initial-state`.
+- A custom `authDomain` (not `*.firebaseapp.com`/`*.web.app`) without a confirmed reverse proxy forwarding `/__/auth/**`: Firebase's sign-in helper pages don't exist at that domain otherwise.
+- Whether the redirect/callback URI registered with your OAuth provider's own console exactly equals the computed auth handler URL.
+- `auth/operation-not-supported-in-this-environment` (popups inside an embedded WebView such as Capacitor), `auth/popup-blocked` (a `signInWithPopup()` call that lost its user-gesture context), `auth/invalid-continue-uri`, `auth/web-storage-unsupported` (Safari Private Browsing and similar), and `auth/redirect-cancelled-by-user` (not a bug: the user closed the consent screen).
+
+## Who it's for
+
+Any developer hitting Firebase Authentication's `auth/unauthorized-domain`, `auth/missing-initial-state`, or a `signInWithRedirect()`/`signInWithPopup()` flow that fails silently: on Firebase Hosting, Vercel, Netlify, a custom domain, localhost, or inside a Capacitor/webview shell, with Google, Apple, Facebook, GitHub, or Microsoft as the provider.
+
+## How it works
+
+Static HTML plus one dependency-free JavaScript file, `doctor-firebase.js`. All checks run in your browser against the values you type; the tool has no backend and makes no request that carries your configuration anywhere.
+
+## Privacy
+
+No account, no login, no cookies for the tool itself, no server-side processing of your config. The only analytics are anonymous usage counts (event name + count, never the content of what you entered) sent to a self-hosted Umami instance.
+
+## Links
+
+- Tool: https://arling.sk/firebase-auth-domain-doctor/
+- Full reference (worked example + FAQ): https://arling.sk/firebase-auth-domain-doctor/llms-full.txt
+- Source code: https://github.com/AndryRoby/firebase-auth-domain-doctor
+- Sibling tool for Google OAuth redirect_uri_mismatch: https://arling.sk/google-oauth-redirect-doctor/
+- Sibling tool for Supabase Auth on the web (Next.js/Vite/SvelteKit): https://arling.sk/supabase-redirect-doctor/
+- Sibling tool for Supabase Auth on Expo / React Native: https://arling.sk/expo-supabase-auth-doctor/
+- Sibling tool for Supabase Auth on Flutter: https://arling.sk/flutter-supabase-doctor/
+- Hub (more ARLing tools): https://arling.sk/
+
+## Contact
+
+Built by ARLing s. r. o. (Bratislava, Slovakia). andrej@arling.sk
