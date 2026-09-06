@@ -417,7 +417,7 @@ export function diagnose(config) {
   } else {
     checklist.push('Once app.pageOrigin and app.authDomain are filled in, this checklist will name the exact domains to authorize.');
   }
-  checklist.push('Confirm the authDomain in the firebaseConfig actually deployed matches the one you’re checking here — prod, staging, and localhost builds often carry different values.');
+  checklist.push('Confirm the authDomain in the firebaseConfig actually deployed matches the one you’re checking here: prod, staging, and localhost builds often carry different values.');
   checklist.push('If you use signInWithRedirect() across two different origins, plan around third-party cookie blocking now: Chrome, Firefox, and Safari all restrict it by default in current releases.');
   if (expected.note) checklist.push(expected.note);
 

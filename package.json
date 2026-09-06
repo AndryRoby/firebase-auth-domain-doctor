@@ -1,7 +1,7 @@
 {
   "name": "firebase-auth-domain-doctor",
   "version": "1.0.0",
-  "description": "Firebase Auth Domain Doctor — free, client-side diagnostic for auth/unauthorized-domain and a signInWithRedirect that never returns, across authDomain, Authorized domains, and every OAuth provider's redirect URI.",
+  "description": "Firebase Auth Domain Doctor: free, client-side diagnostic for auth/unauthorized-domain and a signInWithRedirect that never returns, across authDomain, Authorized domains, and every OAuth provider's redirect URI.",
   "private": true,
   "type": "module",
   "scripts": {
