@@ -134,7 +134,7 @@ Found an `auth/unauthorized-domain` or redirect-flow cause this tool doesn't cat
 
 ## License
 
-All rights reserved, see [LICENSE-NOTICE.md](LICENSE-NOTICE.md). Reading the source and learning from it is fine; deploying your own copy of it as a competing product is not.
+MIT, see [LICENSE](LICENSE). Use it, fork it, ship it in your own projects. The ARLing name and logo are not part of the license, so please do not present a fork as an ARLing product. Bug reports and pull requests are welcome.
 
 ---
 
